@@ -13,7 +13,7 @@ function getNextPosition(row, col, direction, rows) {
   return { row: nextRow, col };
 }
 
-export default function App() {
+export default function FieldMapper() {
   const [grid, setGrid] = useState(createEmptyGrid());
   const [currentCol, setCurrentCol] = useState(0);
   const [currentRow, setCurrentRow] = useState(ROWS - 1);
@@ -34,15 +34,16 @@ export default function App() {
 
   // Plant crop at current position
   const plantCrop = useCallback(() => {
+    // Compute quality ONCE so grid and stats always agree
+    const quality = Math.random() > 0.3 ? "good" : "bad";
+
     setGrid(prev => {
       const next = prev.map(r => [...r]);
       if (next[currentRow][currentCol] !== null) return prev;
-      const quality = Math.random() > 0.3 ? "good" : "bad";
       next[currentRow][currentCol] = quality;
       return next;
     });
 
-    const quality = Math.random() > 0.3 ? "good" : "bad";
     setStats(prev => ({
       total: prev.total + 1,
       good: prev.good + (quality === "good" ? 1 : 0),
@@ -61,7 +62,7 @@ export default function App() {
     }
   }, [currentRow, currentCol, direction, addLog]);
 
-  // Advance to next column
+  // Advance to next column — stays at the SAME row, just shifts one column right
   const nextColumn = useCallback(() => {
     const nextCol = currentCol + 1;
     if (nextCol >= COLS) {
@@ -69,13 +70,20 @@ export default function App() {
       return;
     }
     const newDirection = direction === "up" ? "down" : "up";
-    const newRow = newDirection === "up" ? ROWS - 1 : 0;
     setCurrentCol(nextCol);
     setDirection(newDirection);
-    setCurrentRow(newRow);
+    // Keep currentRow unchanged — cursor moves horizontally, not jumping to top/bottom
     setColFull(false);
     addLog(`→ Column ${nextCol + 1} | Direction: ${newDirection === "up" ? "S→N" : "N→S"}`, "info");
   }, [currentCol, direction, addLog]);
+
+  // Refs that always point to the latest plantCrop / nextColumn
+  // This fixes the stale-closure bug where WebSocket onmessage
+  // captures the initial (stale) versions of these callbacks.
+  const plantCropRef = useRef(plantCrop);
+  const nextColumnRef = useRef(nextColumn);
+  useEffect(() => { plantCropRef.current = plantCrop; }, [plantCrop]);
+  useEffect(() => { nextColumnRef.current = nextColumn; }, [nextColumn]);
 
   // WebSocket connection
   const connectWs = useCallback(() => {
@@ -95,8 +103,9 @@ export default function App() {
       ws.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          if (data.sensor === 1) plantCrop();
-          if (data.sensor === 2) nextColumn();
+          // Always call through the ref so we get the latest state
+          if (data.sensor === 1) plantCropRef.current();
+          if (data.sensor === 2) nextColumnRef.current();
         } catch {
           addLog(`Raw: ${e.data}`, "info");
         }
@@ -113,7 +122,7 @@ export default function App() {
       setWsStatus("error");
       addLog("Invalid WebSocket URL.", "bad");
     }
-  }, [wsUrl, plantCrop, nextColumn, addLog]);
+  }, [wsUrl, addLog]);
 
   const disconnectWs = () => {
     if (wsRef.current) wsRef.current.close();
